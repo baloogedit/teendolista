@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+session_start();
 
 function db(): PDO {
     static $pdo = null;   // csak az első hívásnál csatlakozik, utána újrahasználja
@@ -52,6 +53,10 @@ function teendo(int $id): array {
 }
 
 $id = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+if (in_array($_SERVER['REQUEST_METHOD'], ['POST', 'PATCH', 'DELETE'], true)
+    && !hash_equals($_SESSION['csrf'] ?? '', $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')) {
+    valasz(403, ['hiba' => 'Érvénytelen vagy hiányzó CSRF token.']);
+}
 switch ($_SERVER['REQUEST_METHOD']) {
     case 'GET':
         if ($id) {
@@ -94,7 +99,7 @@ switch ($_SERVER['REQUEST_METHOD']) {
             valasz(404, ['hiba' => 'Nincs ilyen teendő.']);
         }
         valasz(204);
-        
+
     default:
         header('Allow: GET, POST, PATCH, DELETE');
         valasz(405, ['hiba' => 'Nem támogatott metódus.']);
