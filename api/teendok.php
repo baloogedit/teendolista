@@ -1,4 +1,14 @@
 <?php
+declare(strict_types=1);
+
+function db(): PDO {
+    static $pdo = null;   // csak az első hívásnál csatlakozik, utána újrahasználja
+    $pdo ??= new PDO('sqlite:' . __DIR__ . '/../teendok.sqlite', null, null, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,   // sorok tömbként: $sor['cim']
+    ]);
+    return $pdo;
+}
 
 function valasz(int $kod, mixed $adat = null): never {
     http_response_code($kod);
@@ -27,6 +37,65 @@ function json_torzs(): array {
     return $d;
 }
 
-valasz(200, json_torzs());
+function formaz(array $s): array {
+    return ['id' => (int)$s['id'], 'cim' => $s['cim'], 'kesz' => (bool)$s['kesz']];
+}
 
-?>
+function teendo(int $id): array {
+    $stmt = db()->prepare('SELECT id, cim, kesz FROM teendo WHERE id = ?');
+    $stmt->execute([$id]);
+    $sor = $stmt->fetch();
+    if (!$sor) {
+        valasz(404, ['hiba' => 'Nincs ilyen teendő.']);
+    }
+    return formaz($sor);
+}
+
+$id = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+switch ($_SERVER['REQUEST_METHOD']) {
+    case 'GET':
+        if ($id) {
+            valasz(200, teendo($id));
+        }
+        $sorok = db()->query('SELECT id, cim, kesz FROM teendo ORDER BY id')->fetchAll();
+        valasz(200, array_map('formaz', $sorok));
+
+    case 'POST':
+        $d = json_torzs();
+        $cim = trim((string)($d['cim'] ?? ''));
+        if ($cim === '' || mb_strlen($cim) > 200) {
+            valasz(422, ['hiba' => 'A cím 1–200 karakter legyen.']);
+        }
+        db()->prepare('INSERT INTO teendo (cim) VALUES (?)')->execute([$cim]);
+        $uj = (int)db()->lastInsertId();
+        header('Location: /api/teendok.php?id=' . $uj);
+        valasz(201, ['id' => $uj, 'cim' => $cim, 'kesz' => false]);
+
+
+     case 'PATCH':
+        if (!$id) {
+            valasz(400, ['hiba' => 'Hiányzó vagy hibás id.']);
+        }
+        teendo($id);                       // ha nincs ilyen → 404
+        $d = json_torzs();
+        if (!array_key_exists('kesz', $d) || !is_bool($d['kesz'])) {
+            valasz(422, ['hiba' => 'A kesz mező true vagy false legyen.']);
+        }
+        db()->prepare('UPDATE teendo SET kesz = ? WHERE id = ?')->execute([$d['kesz'] ? 1 : 0, $id]);
+        valasz(200, teendo($id));          // a frissített sort küldjük vissza
+
+    case 'DELETE':
+        if (!$id) {
+            valasz(400, ['hiba' => 'Hiányzó vagy hibás id.']);
+        }
+        $stmt = db()->prepare('DELETE FROM teendo WHERE id = ?');
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 0) {     // nem volt mit törölni
+            valasz(404, ['hiba' => 'Nincs ilyen teendő.']);
+        }
+        valasz(204);
+        
+    default:
+        header('Allow: GET, POST, PATCH, DELETE');
+        valasz(405, ['hiba' => 'Nem támogatott metódus.']);
+}
